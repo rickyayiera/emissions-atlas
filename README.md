@@ -4,7 +4,7 @@ This workspace explores and visualizes emissions data. It currently contains a g
 
 ## Interactive dashboard
 
-The Streamlit dashboard presents the country-year workbook as an interactive emissions explorer. It includes filters for year, World Bank region, and income level; selectable measures; trend and top-country charts; an income-versus-emissions bubble plot; a sortable country table; and a filtered CSV download.
+The Streamlit dashboard presents the country-year workbook as a presentation-ready emissions atlas. It includes switchable Field guide, Civic blue, and Carbon contrast themes; a vertically scrolling factual highlight carousel with per-card shuffle controls; region and income emissions-share doughnuts; year, region, and income filters; selectable measures; selectable trend charts with a data lens; top-country charts; an interactive country choropleth with hover details and click-linked country/region charts and tables; country and region glance/deep-dive popovers; a country distribution with mean and standard-deviation markers; a sortable country table; a filtered CSV download; an illustrative what-if lab; and a **Calculations** tab with live numerators, denominators, observation counts, formulas, and chart-method explanations.
 
 Install the project dependencies and start the dashboard from the project root:
 
@@ -58,24 +58,24 @@ To export a longitudinal, Power BI-ready workbook with emissions, population, an
 python scripts/export_powerbi_workbook.py
 ```
 
-The script downloads observations from the World Bank API and creates `data/emissions_powerbi_2000_2023.xlsx`. The workbook contains:
+The script discovers and assesses indicators through the UN Data Commons MCP service, downloads bounded 2000–2023 observations, and creates `data/emissions_powerbi_2000_2023.xlsx`. The workbook contains:
 
-- `FactCountryYear` — one row per country/economy-year with available emissions, population, and GDP-per-capita measures, plus calculated emissions per capita and emissions per GDP.
-- `DimCountry` — country/economy names, ISO3 keys, World Bank regions, income levels, and lending types.
+- `FactCountryYear` — one row per country/economy-year with available CO₂ emissions, population, total GDP, GDP per capita, emissions per capita, and emissions intensity.
+- `DimCountry` — country/economy names, ISO3 keys, and World Bank regions, income levels, and lending types where available; missing classifications are marked `Unknown`.
 - `DimYear` — calendar year and decade attributes.
-- `FieldGuide` — field definitions, units, indicator codes, sources, and calculation notes.
+- `FieldGuide` — field definitions, units, Data Commons indicators and source facets, and calculation notes.
 - `ModelGuide` — relationship setup and data interpretation notes.
 
 In Power BI, load the workbook tables and create one-to-many, single-direction relationships from `DimCountry[CountryISO3]` to `FactCountryYear[CountryISO3]` and from `DimYear[Year]` to `FactCountryYear[Year]`. Blank cells mean the source observation is unavailable; they should not be replaced with zero. Each indicator has its own coverage, so calculated measures are blank when required inputs are missing. The workbook is refreshed by rerunning the script; it requires an internet connection and Python's `openpyxl` package.
 
 ### Data sources and interpretation
 
-- **CO2 emissions:** World Bank World Development Indicators, indicator `EN.GHG.CO2.MT.CE.AR5`. The indicator is sourced from the EDGAR/JRC Community GHG Database and measures CO2 emissions in Mt CO2e, excluding land use, land-use change, and forestry (LULUCF).
-- **GDP per capita:** World Bank indicator `NY.GDP.PCAP.CD` (current US$).
-- **Population:** World Bank indicator `SP.POP.TOTL`.
-- **Country names and regions:** World Bank country metadata.
+- **CO₂ emissions:** UN Statistics Division SDG Data Portal, Data Commons indicator `undata/sdg/EN_ATM_CO2`. This is CO₂ from fuel combustion, not total greenhouse gas emissions and not CO₂-equivalent (CO₂e).
+- **GDP:** UNIDO Statistics Data Portal, Data Commons indicator `undata/unido/NA_GDPCUD`, in current US dollars. GDP per capita is derived as total GDP divided by population.
+- **Population:** UNICEF Data, Data Commons indicator `undata/unicef/DM_POP`.
+- **Country classifications:** World Bank metadata; Data Commons country names supplement entities without a World Bank match.
 
-The association shown is descriptive and does not establish that income causes emissions. GDP is in current US dollars, and country-level emissions per capita is calculated as total emissions divided by population.
+The exporter requires an internet connection and calls `https://unsd-datacommons.gcp.un-icc.cloud/mcp`. It discovers each indicator, verifies a source facet covers 2000–2023, and fails if the requested coverage is not available. Emissions are converted from tonnes to Mt; country-level emissions per capita is total emissions divided by population, and intensity is kilograms of CO₂ divided by total GDP. The association shown is descriptive and does not establish that income causes emissions. GDP is in current US dollars and is not adjusted for inflation or purchasing power.
 
 ## Global time series
 
