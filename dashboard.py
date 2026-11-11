@@ -1,12 +1,9 @@
 from pathlib import Path
-import base64
-import json
 import random
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 ROOT = Path(__file__).resolve().parent
@@ -16,16 +13,20 @@ FACT_COLUMNS = [
     "CountryISO3",
     "EmissionsMtCO2",
     "Population",
-    "GDPUSD",
     "GDPPerCapitaUSD",
     "EmissionsPerCapitaTonnesCO2",
     "EmissionsKgCO2PerGDPUSD",
 ]
+FACT_COLUMN_RENAMES = {
+    "EmissionsMtCO2": "EmissionsMtCO2e",
+    "EmissionsPerCapitaTonnesCO2": "EmissionsPerCapitaTonnesCO2e",
+    "EmissionsKgCO2PerGDPUSD": "EmissionsKgPerGDPUSD",
+}
 METRICS = {
-    "Total CO₂ emissions": ("EmissionsMtCO2", "Mt CO₂"),
-    "Emissions per person": ("EmissionsPerCapitaTonnesCO2", "tonnes CO₂/person"),
+    "Total CO₂ emissions": ("EmissionsMtCO2e", "Mt CO₂e"),
+    "Emissions per person": ("EmissionsPerCapitaTonnesCO2e", "tonnes CO₂e/person"),
     "GDP per person": ("GDPPerCapitaUSD", "current US$/person"),
-    "Emissions intensity": ("EmissionsKgCO2PerGDPUSD", "kg CO₂/current US$"),
+    "Emissions intensity": ("EmissionsKgPerGDPUSD", "kg CO₂e/current US$"),
 }
 THEMES = {
     "Field guide": {
@@ -34,8 +35,6 @@ THEMES = {
         "muted": "#657572",
         "text": "#172c2a",
         "accent": "#148b78",
-        "hero_start": "#123b39",
-        "hero_end": "#177c69",
         "grid": "#e3ebe8",
     },
     "Civic blue": {
@@ -44,8 +43,6 @@ THEMES = {
         "muted": "#637189",
         "text": "#1c2d48",
         "accent": "#356bd1",
-        "hero_start": "#1c3559",
-        "hero_end": "#356bd1",
         "grid": "#e2e8f1",
     },
     "Carbon contrast": {
@@ -54,15 +51,13 @@ THEMES = {
         "muted": "#a7b6b2",
         "text": "#edf4f1",
         "accent": "#6bd5ad",
-        "hero_start": "#101f1e",
-        "hero_end": "#246653",
         "grid": "#344744",
     },
 }
 
 
 st.set_page_config(
-    page_title="Emissions Atlas | UN Data Commons",
+    page_title="Emissions data | UN Data Commons",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -72,6 +67,7 @@ st.set_page_config(
 def load_data(workbook_path, modified_time):
     del modified_time
     fact = pd.read_excel(workbook_path, sheet_name="FactCountryYear", usecols=FACT_COLUMNS)
+    fact = fact.rename(columns=FACT_COLUMN_RENAMES)
     countries = pd.read_excel(
         workbook_path,
         sheet_name="DimCountry",
@@ -106,27 +102,27 @@ def aggregate_value(frame, column, year=None):
     if valid.empty:
         return None
 
-    if column == "EmissionsMtCO2":
+    if column == "EmissionsMtCO2e":
         return valid[column].sum()
     if column == "Population":
         return valid[column].sum()
-    if column == "EmissionsPerCapitaTonnesCO2":
+    if column == "EmissionsPerCapitaTonnesCO2e":
         paired = valid.dropna(subset=["Population"])
         population = paired["Population"].sum()
-        emissions = paired["EmissionsMtCO2"].sum(min_count=1)
+        emissions = paired["EmissionsMtCO2e"].sum(min_count=1)
         return emissions * 1_000_000 / population if population > 0 else None
     if column == "GDPPerCapitaUSD":
-        paired = valid.dropna(subset=["GDPUSD", "Population"])
+        paired = valid.dropna(subset=["Population"])
         population = paired["Population"].sum()
         return (
-            paired["GDPUSD"].sum() / population
+            (paired["GDPPerCapitaUSD"] * paired["Population"]).sum() / population
             if population > 0
             else None
         )
-    if column == "EmissionsKgCO2PerGDPUSD":
-        paired = valid.dropna(subset=["EmissionsMtCO2", "GDPUSD"])
-        total_gdp = paired["GDPUSD"].sum()
-        total_emissions_kg = paired["EmissionsMtCO2"].sum() * 1_000_000_000
+    if column == "EmissionsKgPerGDPUSD":
+        paired = valid.dropna(subset=["EmissionsMtCO2e", "GDPPerCapitaUSD", "Population"])
+        total_gdp = (paired["GDPPerCapitaUSD"] * paired["Population"]).sum()
+        total_emissions_kg = paired["EmissionsMtCO2e"].sum() * 1_000_000_000
         return total_emissions_kg / total_gdp if total_gdp > 0 else None
     return None
 
@@ -134,13 +130,13 @@ def aggregate_value(frame, column, year=None):
 def format_metric(value, column):
     if value is None or pd.isna(value):
         return "—"
-    if column == "EmissionsMtCO2":
+    if column == "EmissionsMtCO2e":
         return f"{value:,.1f}"
     if column == "Population":
         return f"{value:,.0f}"
     if column == "GDPPerCapitaUSD":
         return f"${value:,.0f}"
-    if column == "EmissionsPerCapitaTonnesCO2":
+    if column == "EmissionsPerCapitaTonnesCO2e":
         return f"{value:,.2f}"
     return f"{value:,.3f}"
 
@@ -156,15 +152,15 @@ def aggregate_trend(frame, column):
 
 def live_calculation_rows(frame):
     rows = []
-    emissions = frame.dropna(subset=["EmissionsMtCO2"])
+    emissions = frame.dropna(subset=["EmissionsMtCO2e"])
     rows.append(
         {
             "Measure": "Total CO₂ emissions",
             "Calculation": "Sum of available country emissions",
-            "Numerator": f"{emissions['EmissionsMtCO2'].sum():,.3f} Mt CO₂",
+            "Numerator": f"{emissions['EmissionsMtCO2e'].sum():,.3f} Mt CO₂e",
             "Denominator": "—",
             "Rows used": len(emissions),
-            "Result": format_metric(aggregate_value(frame, "EmissionsMtCO2"), "EmissionsMtCO2"),
+            "Result": format_metric(aggregate_value(frame, "EmissionsMtCO2e"), "EmissionsMtCO2e"),
         }
     )
 
@@ -180,32 +176,32 @@ def live_calculation_rows(frame):
         }
     )
 
-    per_person = frame.dropna(subset=["EmissionsMtCO2", "Population"])
-    per_person = per_person[(per_person["EmissionsMtCO2"] >= 0) & (per_person["Population"] > 0)]
-    emissions_tonnes = per_person["EmissionsMtCO2"].sum() * 1_000_000
+    per_person = frame.dropna(subset=["EmissionsMtCO2e", "Population"])
+    per_person = per_person[(per_person["EmissionsMtCO2e"] >= 0) & (per_person["Population"] > 0)]
+    emissions_tonnes = per_person["EmissionsMtCO2e"].sum() * 1_000_000
     population_sum = per_person["Population"].sum()
     rows.append(
         {
             "Measure": "Emissions per person",
             "Calculation": "Sum(emissions × 1,000,000) ÷ sum(population)",
-            "Numerator": f"{emissions_tonnes:,.3f} tonnes CO₂",
+            "Numerator": f"{emissions_tonnes:,.3f} tonnes CO₂e",
             "Denominator": f"{population_sum:,.0f} people",
             "Rows used": len(per_person),
             "Result": format_metric(
-                aggregate_value(frame, "EmissionsPerCapitaTonnesCO2"),
-                "EmissionsPerCapitaTonnesCO2",
+                aggregate_value(frame, "EmissionsPerCapitaTonnesCO2e"),
+                "EmissionsPerCapitaTonnesCO2e",
             ),
         }
     )
 
-    gdp = frame.dropna(subset=["GDPUSD", "Population"])
-    gdp = gdp[(gdp["Population"] > 0) & (gdp["GDPUSD"] >= 0)]
-    weighted_gdp = gdp["GDPUSD"].sum()
+    gdp = frame.dropna(subset=["GDPPerCapitaUSD", "Population"])
+    gdp = gdp[gdp["Population"] > 0]
+    weighted_gdp = (gdp["GDPPerCapitaUSD"] * gdp["Population"]).sum()
     gdp_population = gdp["Population"].sum()
     rows.append(
         {
             "Measure": "GDP per person",
-            "Calculation": "sum(GDPUSD) ÷ sum(population)",
+            "Calculation": "Population-weighted mean: sum(GDP/person × population) ÷ sum(population)",
             "Numerator": f"${weighted_gdp:,.0f}",
             "Denominator": f"{gdp_population:,.0f} people",
             "Rows used": len(gdp),
@@ -213,28 +209,31 @@ def live_calculation_rows(frame):
         }
     )
 
-    intensity = frame.dropna(subset=["EmissionsMtCO2", "GDPUSD"])
+    intensity = frame.dropna(
+        subset=["EmissionsMtCO2e", "GDPPerCapitaUSD", "Population"]
+    )
     intensity = intensity[
-        (intensity["EmissionsMtCO2"] >= 0)
-        & (intensity["GDPUSD"] > 0)
+        (intensity["EmissionsMtCO2e"] >= 0)
+        & (intensity["GDPPerCapitaUSD"] > 0)
+        & (intensity["Population"] > 0)
     ]
-    emissions_kg = intensity["EmissionsMtCO2"].sum() * 1_000_000_000
-    total_gdp = intensity["GDPUSD"].sum()
+    emissions_kg = intensity["EmissionsMtCO2e"].sum() * 1_000_000_000
+    total_gdp = (intensity["GDPPerCapitaUSD"] * intensity["Population"]).sum()
     rows.append(
         {
             "Measure": "Emissions intensity",
-            "Calculation": "Sum(emissions × 1,000,000,000) ÷ sum(GDPUSD)",
-            "Numerator": f"{emissions_kg:,.3f} kg CO₂",
+            "Calculation": "Sum(emissions × 1,000,000,000) ÷ sum(GDP/person × population)",
+            "Numerator": f"{emissions_kg:,.3f} kg CO₂e",
             "Denominator": f"${total_gdp:,.0f} total GDP",
             "Rows used": len(intensity),
             "Result": format_metric(
-                aggregate_value(frame, "EmissionsKgCO2PerGDPUSD"),
-                "EmissionsKgCO2PerGDPUSD",
+                aggregate_value(frame, "EmissionsKgPerGDPUSD"),
+                "EmissionsKgPerGDPUSD",
             ),
         }
     )
 
-    valid_per_person = frame["EmissionsPerCapitaTonnesCO2"].dropna()
+    valid_per_person = frame["EmissionsPerCapitaTonnesCO2e"].dropna()
     rows.append(
         {
             "Measure": "Median emissions per person",
@@ -254,13 +253,13 @@ def live_calculation_rows(frame):
 
 def factual_highlights(frame):
     candidates = [
-        ("Total emissions", "EmissionsMtCO2", "Mt CO₂", "🔥"),
-        ("Emissions per person", "EmissionsPerCapitaTonnesCO2", "tonnes CO₂/person", "👣"),
-        ("GDP per person", "GDPPerCapitaUSD", "current US$/person", "💰"),
-        ("Population", "Population", "people", "👥"),
+        ("Total emissions", "EmissionsMtCO2e", "Mt CO₂e"),
+        ("Emissions per person", "EmissionsPerCapitaTonnesCO2e", "tonnes CO₂e/person"),
+        ("GDP per person", "GDPPerCapitaUSD", "current US$/person"),
+        ("Population", "Population", "people"),
     ]
     highlights = []
-    for label, column, unit, icon in candidates:
+    for label, column, unit in candidates:
         valid = frame.dropna(subset=[column])
         if valid.empty:
             continue
@@ -271,7 +270,6 @@ def factual_highlights(frame):
                 "country": row["Country"],
                 "value": format_metric(row[column], column),
                 "unit": unit,
-                "icon": icon,
             }
         )
     return highlights
@@ -279,7 +277,7 @@ def factual_highlights(frame):
 
 def make_deviation_chart(frame, column, label, unit, selected_country=None):
     sample = frame.dropna(subset=[column])
-    if column != "EmissionsMtCO2":
+    if column != "EmissionsMtCO2e":
         sample = sample[sample[column] > 0]
     if len(sample) < 2:
         return None, sample, None, None
@@ -346,156 +344,6 @@ def make_deviation_chart(frame, column, label, unit, selected_country=None):
     return fig, sample, mean, standard_deviation
 
 
-def highlight_carousels(frame):
-    categories = (
-        ("🔥", "Carbon routes", "EmissionsMtCO2", "Mt CO₂"),
-        ("👥", "People & population", "Population", "people"),
-        ("💰", "Economic signposts", "GDPPerCapitaUSD", "current US$/person"),
-        ("🗺️", "Per-person footprints", "EmissionsPerCapitaTonnesCO2", "tonnes CO₂/person"),
-    )
-    cards = []
-    for icon, heading, column, unit in categories:
-        candidates = frame.dropna(subset=[column]).sort_values(column, ascending=False).head(8)
-        if column in ("GDPPerCapitaUSD", "Population", "EmissionsPerCapitaTonnesCO2"):
-            candidates = candidates[candidates[column] > 0]
-        facts = [
-            {
-                "headline": row["Country"],
-                "value": format_metric(row[column], column),
-                "detail": f"{unit} · {row['Region']} · {int(row['Year'])}",
-            }
-            for _, row in candidates.iterrows()
-        ]
-        if column == "EmissionsMtCO2" and not candidates.empty:
-            total = aggregate_value(frame, column)
-            facts.insert(
-                0,
-                {
-                    "headline": "Selected countries",
-                    "value": format_metric(total, column),
-                    "detail": f"reported emissions · {unit}",
-                },
-            )
-        if facts:
-            cards.append(
-                {
-                    "icon": icon,
-                    "heading": heading,
-                    "facts": facts,
-                    "start": random.randrange(len(facts)),
-                }
-            )
-    return cards
-
-
-def highlight_carousel_html(cards):
-    cards_json = json.dumps(cards).replace("</", "<\\/")
-    return f"""
-    <div class="atlas-window" aria-label="Rotating factual highlights">
-      <div class="atlas-track" id="atlas-track"></div>
-    </div>
-    <style>
-      :root {{
-        --panel: {COLORS['panel']}; --ink: {COLORS['text']};
-        --muted: {COLORS['muted']}; --accent: {COLORS['accent']};
-        --line: {COLORS['grid']}; --page: {COLORS['background']};
-      }}
-      body {{ margin: 0; background: transparent; font-family: 'DM Sans', sans-serif; }}
-      * {{ box-sizing: border-box; }}
-      .atlas-window {{
-        height: 330px; overflow: hidden; border-radius: 20px;
-        -webkit-mask-image: linear-gradient(transparent, black 7%, black 93%, transparent);
-        mask-image: linear-gradient(transparent, black 7%, black 93%, transparent);
-      }}
-      .atlas-track {{ display: flex; flex-direction: column; animation: atlas-roll 28s linear infinite; }}
-      .atlas-window:hover .atlas-track, .atlas-window:focus-within .atlas-track {{ animation-play-state: paused; }}
-      .atlas-card {{
-        display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: .8rem;
-        min-height: 137px; margin: 5px 3px; padding: 1.05rem 1.15rem;
-        border: 1px solid var(--line); border-radius: 18px; background: var(--panel);
-        color: var(--ink); box-shadow: 0 7px 22px rgba(27,61,52,.055);
-      }}
-      .atlas-icon {{ font-size: 1.45rem; align-self: start; padding-top: .2rem; }}
-      .atlas-heading {{ color: var(--muted); font-size: .75rem; font-weight: 700;
-        text-transform: uppercase; letter-spacing: .11em; }}
-      .atlas-headline {{ margin-top: .3rem; font-size: 1.05rem; font-weight: 700; }}
-      .atlas-value {{ color: var(--accent); font-size: 1.48rem; font-weight: 700;
-        white-space: nowrap; text-align: right; }}
-      .atlas-detail {{ color: var(--muted); font-size: .77rem; text-align: right; }}
-      .atlas-toggle {{ grid-column: 2 / 4; justify-self: end; border: 1px solid var(--line);
-        border-radius: 999px; padding: .33rem .7rem; background: var(--page);
-        color: var(--ink); font: inherit; font-size: .76rem; cursor: pointer; }}
-      .atlas-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
-      @keyframes atlas-roll {{ from {{ transform: translateY(0); }} to {{ transform: translateY(-50%); }} }}
-      @media (prefers-reduced-motion: reduce) {{ .atlas-track {{ animation: none; }} }}
-      @media (max-width: 640px) {{ .atlas-value {{ font-size: 1.1rem; }} .atlas-card {{ gap: .5rem; }} }}
-    </style>
-    <script>
-      const cardData = {cards_json};
-      const track = document.getElementById("atlas-track");
-      function makeCard(card, index, clone) {{
-        const fact = card.facts[card.index];
-        const element = document.createElement("article");
-        element.className = "atlas-card";
-        const icon = document.createElement("span");
-        icon.className = "atlas-icon";
-        icon.textContent = card.icon;
-        const content = document.createElement("div");
-        const heading = document.createElement("div");
-        heading.className = "atlas-heading";
-        heading.textContent = card.heading;
-        const headline = document.createElement("div");
-        headline.className = "atlas-headline";
-        headline.textContent = fact.headline;
-        content.append(heading, headline);
-        const value = document.createElement("div");
-        const number = document.createElement("div");
-        number.className = "atlas-value";
-        number.textContent = fact.value;
-        const detail = document.createElement("div");
-        detail.className = "atlas-detail";
-        detail.textContent = fact.detail;
-        value.append(number, detail);
-        const button = document.createElement("button");
-        button.className = "atlas-toggle";
-        button.type = "button";
-        button.textContent = "↻ Shuffle this card";
-        button.setAttribute("aria-label", "Show another " + card.heading + " highlight");
-        button.dataset.card = index;
-        if (clone) button.tabIndex = -1;
-        element.append(icon, content, value, button);
-        return element;
-      }}
-      function renderCards() {{
-        track.replaceChildren();
-        cardData.forEach((card, index) => track.append(makeCard(card, index, false)));
-        cardData.forEach((card, index) => {{
-          const clone = makeCard(card, index, true);
-          clone.setAttribute("aria-hidden", "true");
-          track.append(clone);
-        }});
-      }}
-      cardData.forEach(card => card.index = card.start);
-      renderCards();
-      track.addEventListener("click", event => {{
-        const button = event.target.closest("button[data-card]");
-        if (!button) return;
-        const card = cardData[Number(button.dataset.card)];
-        if (card.facts.length < 2) return;
-        let next = card.index;
-        while (next === card.index) next = Math.floor(Math.random() * card.facts.length);
-        card.index = next;
-        const offset = Number(button.dataset.card);
-        track.replaceChild(makeCard(card, offset, false), track.children[offset]);
-        const cloneOffset = cardData.length + offset;
-        const clone = makeCard(card, offset, true);
-        clone.setAttribute("aria-hidden", "true");
-        track.replaceChild(clone, track.children[cloneOffset]);
-      }});
-    </script>
-    """
-
-
 if not WORKBOOK_PATH.exists():
     st.error(
         "The Power BI workbook was not found. Generate it first with "
@@ -514,37 +362,24 @@ COLORS = THEMES[theme_name]
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
     .stApp {{ background: {COLORS['background']}; color: {COLORS['text']}; font-family: 'DM Sans', sans-serif; }}
     [data-testid="stSidebar"] {{ background: {COLORS['panel']}; border-right: 1px solid {COLORS['grid']}; }}
-    h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif !important; color: {COLORS['text']} !important; }}
+    .main .block-container {{ max-width: 1440px; padding-top: 1.5rem; padding-bottom: 3rem; }}
+    h1, h2, h3 {{ color: {COLORS['text']} !important; }}
     [data-testid="stMetric"] {{
-      background: linear-gradient(145deg, {COLORS['panel']}, {COLORS['background']});
-      border: 1px solid {COLORS['grid']}; padding: 18px 20px; border-radius: 18px;
-      box-shadow: 0 8px 24px rgba(27, 61, 52, .05);
+      background: {COLORS['panel']}; border: 1px solid {COLORS['grid']};
+      padding: 14px 16px; border-radius: 8px; box-shadow: none;
     }}
     [data-testid="stMetricLabel"] {{ color: {COLORS['muted']} !important; }}
-    [data-testid="stMetricValue"] {{ color: {COLORS['text']} !important; font-family: 'Space Grotesk', sans-serif; }}
+    [data-testid="stMetricValue"] {{ color: {COLORS['text']} !important; }}
     div[data-testid="stVerticalBlockBorderWrapper"] {{
-      background: {COLORS['panel']}; border: 1px solid {COLORS['grid']}; border-radius: 18px;
-      box-shadow: 0 8px 24px rgba(27, 61, 52, .045);
+      background: {COLORS['panel']}; border: 1px solid {COLORS['grid']};
+      border-radius: 8px; box-shadow: none;
     }}
     div[data-testid="stVerticalBlock"] div[data-testid="stHorizontalBlock"] {{ gap: 1rem; }}
     button[data-baseweb="tab"] {{ font-weight: 600; }}
     button[data-baseweb="tab"][aria-selected="true"] {{ color: {COLORS['accent']}; }}
-    .hero {{
-      padding: 2rem 2.2rem; margin: .4rem 0 1.2rem; border-radius: 24px;
-      color: #f4fbf8;
-      background: radial-gradient(circle at 85% 15%, rgba(109, 215, 177, .28), transparent 28%),
-        linear-gradient(120deg, {COLORS['hero_start']}, {COLORS['hero_end']});
-      box-shadow: 0 16px 36px rgba(18, 59, 57, .15);
-    }}
-    .hero h1 {{ color: #f4fbf8 !important; font-size: 2.65rem; margin: .25rem 0 .45rem; }}
-    .eyebrow {{ color: #b7efdc; text-transform: uppercase; letter-spacing: .16em;
-      font-size: .73rem; font-weight: 700; }}
-    .hero-copy {{ color: #e0f1eb; max-width: 760px; font-size: 1rem; }}
-    .hero-route {{ margin-top: 1.2rem; padding-top: .8rem; border-top: 1px dashed rgba(230,255,245,.45);
-      color: #c9eee1; font-size: .82rem; letter-spacing: .04em; }}
     .section-note {{ color: {COLORS['muted']}; font-size: .9rem; margin-top: -.35rem; }}
     .stCaption {{ color: {COLORS['muted']}; }}
     </style>
@@ -556,6 +391,10 @@ st.sidebar.markdown("## Explore the data")
 st.sidebar.caption("Filters update the charts, indicators, table, and export.")
 
 min_year, max_year = int(data["Year"].min()), int(data["Year"].max())
+if "snapshot_year" not in st.session_state:
+    st.session_state["snapshot_year"] = max_year
+if "measure_label" not in st.session_state:
+    st.session_state["measure_label"] = next(iter(METRICS))
 year_range = st.sidebar.slider(
     "Trend period",
     min_value=min_year,
@@ -565,10 +404,26 @@ year_range = st.sidebar.slider(
 snapshot_year = st.sidebar.select_slider(
     "Snapshot year",
     options=list(range(min_year, max_year + 1)),
-    value=max_year,
+    key="snapshot_year",
 )
-measure_label = st.sidebar.selectbox("Measure", list(METRICS))
+measure_label = st.sidebar.selectbox("Measure", list(METRICS), key="measure_label")
 measure_column, measure_unit = METRICS[measure_label]
+
+
+def shuffle_view():
+    current_year = st.session_state.get("snapshot_year", max_year)
+    year_options = [year for year in range(min_year, max_year + 1) if year != current_year]
+    if year_options:
+        st.session_state["snapshot_year"] = random.choice(year_options)
+
+    measure_options = [measure for measure in METRICS if measure != st.session_state.get("measure_label")]
+    if measure_options:
+        st.session_state["measure_label"] = random.choice(measure_options)
+
+
+def toggle_insights():
+    st.session_state["insights_open"] = not st.session_state.get("insights_open", False)
+
 
 regions = sorted(data["Region"].dropna().unique())
 selected_regions = st.sidebar.multiselect("World Bank regions", regions, default=regions)
@@ -632,17 +487,17 @@ def regional_trend(frame, column):
 
 def emissions_share_chart(frame, group_column):
     share = (
-        frame.dropna(subset=["EmissionsMtCO2"])
-        .groupby(group_column, as_index=False)["EmissionsMtCO2"]
+        frame.dropna(subset=["EmissionsMtCO2e"])
+        .groupby(group_column, as_index=False)["EmissionsMtCO2e"]
         .sum()
     )
-    share = share[share["EmissionsMtCO2"] > 0]
+    share = share[share["EmissionsMtCO2e"] > 0]
     if share.empty:
         return None
     fig = px.pie(
         share,
         names=group_column,
-        values="EmissionsMtCO2",
+        values="EmissionsMtCO2e",
         hole=0.58,
         color_discrete_sequence=px.colors.qualitative.Safe,
     )
@@ -731,24 +586,28 @@ def make_trend_chart(frame):
     return fig
 
 
-st.markdown(
-    """
-    <div class="hero">
-      <div class="eyebrow">UN Data Commons · emissions explorer</div>
-      <h1>Emissions Atlas</h1>
-      <div class="hero-copy">A visual field guide to emissions, population, and prosperity.
-      Follow the data route from places and people to economies and emissions.</div>
-      <div class="hero-route"> ROUTES &nbsp; · &nbsp; ECONOMY &nbsp; · &nbsp;
-      PEOPLE &nbsp; · &nbsp; PLACES</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-st.caption(
-    "Emissions are CO₂ from fuel combustion only—not total greenhouse gases or CO₂e. "
-    "GDP per person is derived from UNIDO current-price GDP and UNICEF population. "
-    "Country classifications are World Bank metadata; associations are descriptive, not causal."
-)
+title_column, shuffle_column, insights_column = st.columns([4, 1, 1])
+with title_column:
+    st.title("Emissions data")
+    st.caption(
+        "Country-level trends and comparisons · World Bank / EDGAR CO₂ emissions excluding land use, "
+        "land-use change, and forestry (LULUCF) · GDP per capita in current US dollars."
+    )
+with shuffle_column:
+    st.button(
+        "Shuffle",
+        key="shuffle_view",
+        help="Choose a different snapshot year and measure.",
+        on_click=shuffle_view,
+        use_container_width=True,
+    )
+with insights_column:
+    st.button(
+        "Hide insights" if st.session_state.get("insights_open", False) else "Insights",
+        key="toggle_insights",
+        on_click=toggle_insights,
+        use_container_width=True,
+    )
 
 if base.empty:
     st.warning("No rows match the selected filters and trend period.")
@@ -762,10 +621,51 @@ snapshot = data[
 metric_value = aggregate_value(snapshot, measure_column)
 population_value = aggregate_value(snapshot, "Population")
 country_coverage = snapshot[measure_column].notna().sum()
-per_capita_median = snapshot["EmissionsPerCapitaTonnesCO2"].median()
+per_capita_median = snapshot["EmissionsPerCapitaTonnesCO2e"].median()
+
+if st.session_state.get("insights_open", False):
+    with st.container(border=True):
+        st.subheader(f"Insights · {snapshot_year}")
+        trend = aggregate_trend(base, measure_column)
+        if len(trend) > 1:
+            first = trend.iloc[0]
+            last = trend.iloc[-1]
+            difference = last["Value"] - first["Value"]
+            if first["Value"] != 0:
+                change = abs(difference / first["Value"] * 100)
+                direction = "increased" if difference > 0 else "decreased" if difference < 0 else "was unchanged"
+                trend_insight = (
+                    f"{measure_label} {direction} by {change:,.1f}% from "
+                    f"{int(first['Year'])} to {int(last['Year'])}."
+                )
+            else:
+                trend_insight = (
+                    f"{measure_label} changed by {difference:,.3f} {measure_unit} from "
+                    f"{int(first['Year'])} to {int(last['Year'])}."
+                )
+            st.write(trend_insight)
+        else:
+            st.caption("Select a trend period with at least two years to see a change over time.")
+        insights = factual_highlights(snapshot)
+        if insights:
+            st.dataframe(
+                pd.DataFrame(insights)
+                .rename(
+                    columns={
+                        "label": "Measure",
+                        "country": "Country",
+                        "value": "Value",
+                        "unit": "Unit",
+                    }
+                )[["Measure", "Country", "Value", "Unit"]],
+                hide_index=True,
+                width="stretch",
+            )
+        else:
+            st.info("No complete records are available for this snapshot.")
 
 overview_tab, compare_tab, data_tab, experiment_tab, calculations_tab = st.tabs(
-    ["✦ Overview", "◎ Compare", "▤ Country data", "⌁ Experiment lab", "∑ Calculations"]
+    ["Overview", "Compare", "Country data", "Experiment", "Calculations"]
 )
 
 with overview_tab:
@@ -783,7 +683,7 @@ with overview_tab:
         st.metric(
             "Median emissions/person",
             f"{per_capita_median:,.2f}" if not pd.isna(per_capita_median) else "—",
-            "tonnes CO₂",
+            "tonnes CO₂e",
         )
     with st.expander("How are these headline statistics calculated?"):
         st.caption(
@@ -794,32 +694,6 @@ with overview_tab:
             live_calculation_rows(snapshot),
             hide_index=True,
             width="stretch",
-        )
-
-    st.markdown("### The moving atlas · live data highlights")
-    st.caption(
-        "Each card scrolls through real workbook records. Pause the motion by hovering, "
-        "or shuffle an individual card to reveal another noteworthy value."
-    )
-    carousel_cards = highlight_carousels(snapshot)
-    if carousel_cards:
-        carousel_html = highlight_carousel_html(carousel_cards)
-        if hasattr(st, "iframe"):
-            carousel_src = base64.b64encode(carousel_html.encode("utf-8")).decode("ascii")
-            st.iframe(
-                f"data:text/html;base64,{carousel_src}",
-                height=350,
-                alt="Scrolling factual highlight cards with individual shuffle controls",
-            )
-        else:
-            components.html(carousel_html, height=350, scrolling=False)
-    else:
-        st.info("No complete records are available for highlight cards in this snapshot.")
-    with st.expander("How the moving-highlight cards are calculated"):
-        st.markdown(
-            "- **Carbon routes:** total emissions is the sum of available country emissions for the active filters; country cards rank each country's recorded emissions.\n"
-            "- **People, economy, and per-person footprints:** cards rank countries by the selected year's recorded population, GDP per person, or emissions per person.\n"
-            "- Each card cycles through up to eight highest-ranked country-year records; shuffling changes which record is shown, not the underlying data."
         )
 
     trend_column, bar_column = st.columns([1.55, 1])
@@ -917,14 +791,14 @@ with overview_tab:
                     st.plotly_chart(chart_layout(pie_fig, height=350), width="stretch")
                     with st.expander("Show slice calculations"):
                         pie_rows = (
-                            snapshot.dropna(subset=["EmissionsMtCO2"])
-                            .groupby(grouping, as_index=False)["EmissionsMtCO2"]
+                            snapshot.dropna(subset=["EmissionsMtCO2e"])
+                            .groupby(grouping, as_index=False)["EmissionsMtCO2e"]
                             .sum()
                         )
-                        pie_rows = pie_rows[pie_rows["EmissionsMtCO2"] > 0].copy()
-                        denominator = pie_rows["EmissionsMtCO2"].sum()
+                        pie_rows = pie_rows[pie_rows["EmissionsMtCO2e"] > 0].copy()
+                        denominator = pie_rows["EmissionsMtCO2e"].sum()
                         pie_rows["Share of displayed total (%)"] = (
-                            pie_rows["EmissionsMtCO2"] / denominator * 100
+                            pie_rows["EmissionsMtCO2e"] / denominator * 100
                         )
                         st.caption(
                             "For each category: sum its non-missing country emissions. "
@@ -935,7 +809,7 @@ with overview_tab:
                             pie_rows.rename(
                                 columns={
                                     grouping: "Category",
-                                    "EmissionsMtCO2": "Emissions · Mt CO₂",
+                                    "EmissionsMtCO2e": "Emissions · Mt CO₂e",
                                 }
                             ),
                             hide_index=True,
@@ -960,8 +834,8 @@ with compare_tab:
         if map_column in (
             "GDPPerCapitaUSD",
             "Population",
-            "EmissionsPerCapitaTonnesCO2",
-            "EmissionsKgCO2PerGDPUSD",
+            "EmissionsPerCapitaTonnesCO2e",
+            "EmissionsKgPerGDPUSD",
         ):
             map_snapshot = map_snapshot[map_snapshot[map_column] > 0]
         if map_snapshot.empty:
@@ -975,11 +849,11 @@ with compare_tab:
                 hover_name="Country",
                 custom_data=["CountryISO3", "Region", "IncomeLevel"],
                 hover_data={
-                    "EmissionsMtCO2": ":,.1f",
+                    "EmissionsMtCO2e": ":,.1f",
                     "Population": ":,.0f",
                     "GDPPerCapitaUSD": "$,.0f",
-                    "EmissionsPerCapitaTonnesCO2": ":,.2f",
-                    "EmissionsKgCO2PerGDPUSD": ":,.3f",
+                    "EmissionsPerCapitaTonnesCO2e": ":,.2f",
+                    "EmissionsKgPerGDPUSD": ":,.3f",
                     "CountryISO3": True,
                     "Region": True,
                     "IncomeLevel": True,
@@ -987,7 +861,7 @@ with compare_tab:
                 color_continuous_scale=[
                     [0, COLORS["background"]],
                     [0.55, COLORS["accent"]],
-                    [1, COLORS["hero_end"]],
+                    [1, COLORS["accent"]],
                 ],
                 labels={map_column: map_unit},
             )
@@ -1081,8 +955,8 @@ with compare_tab:
                     country_row = country_snapshot.iloc[0]
                     glance_metrics = st.columns(2)
                     for column, label, metric_column in (
-                        (glance_metrics[0], "Total emissions", "EmissionsMtCO2"),
-                        (glance_metrics[1], "Per person", "EmissionsPerCapitaTonnesCO2"),
+                        (glance_metrics[0], "Total emissions", "EmissionsMtCO2e"),
+                        (glance_metrics[1], "Per person", "EmissionsPerCapitaTonnesCO2e"),
                         (glance_metrics[0], "GDP per person", "GDPPerCapitaUSD"),
                         (glance_metrics[1], "Population", "Population"),
                     ):
@@ -1094,10 +968,10 @@ with compare_tab:
                     st.caption(f"{country_row['Region']} · {country_row['IncomeLevel']} · {snapshot_year}")
                     with st.expander("Country indicator calculations"):
                         st.markdown(
-                            "- Emissions, population, and GDP are source-country values for this year.\n"
-                            "- GDP/person = GDPUSD ÷ population.\n"
-                            "- Emissions/person = emissions in Mt CO₂ × 1,000,000 ÷ population.\n"
-                            "- Emissions intensity = emissions in Mt CO₂ × 1,000,000,000 ÷ GDPUSD.\n"
+                            "- Emissions, population, and GDP/person are the source-country values for this year.\n"
+                            "- Emissions/person = emissions in Mt CO₂e × 1,000,000 ÷ population.\n"
+                            "- Emissions intensity = emissions in Mt CO₂e × 1,000,000,000 ÷ "
+                            "(GDP/person × population).\n"
                             "Derived indicators are blank when an input is missing or a required denominator is not positive."
                         )
         with lens_columns[1]:
@@ -1106,11 +980,11 @@ with compare_tab:
                     st.info("No country trend is available for the selected period.")
                 else:
                     deep_dive_fig = px.line(
-                        country_history.dropna(subset=["EmissionsMtCO2"]),
+                        country_history.dropna(subset=["EmissionsMtCO2e"]),
                         x="Year",
-                        y="EmissionsMtCO2",
+                        y="EmissionsMtCO2e",
                         markers=True,
-                        labels={"EmissionsMtCO2": "Emissions · Mt CO₂"},
+                        labels={"EmissionsMtCO2e": "Emissions · Mt CO₂e"},
                         color_discrete_sequence=[COLORS["accent"]],
                     )
                     st.plotly_chart(chart_layout(deep_dive_fig, height=300), width="stretch")
@@ -1118,8 +992,8 @@ with compare_tab:
                         country_history[
                             [
                                 "Year",
-                                "EmissionsMtCO2",
-                                "EmissionsPerCapitaTonnesCO2",
+                                "EmissionsMtCO2e",
+                                "EmissionsPerCapitaTonnesCO2e",
                                 "GDPPerCapitaUSD",
                                 "Population",
                             ]
@@ -1184,8 +1058,8 @@ with compare_tab:
                         country_table[
                             [
                                 "Year",
-                                "EmissionsMtCO2",
-                                "EmissionsPerCapitaTonnesCO2",
+                                "EmissionsMtCO2e",
+                                "EmissionsPerCapitaTonnesCO2e",
                                 "GDPPerCapitaUSD",
                                 "Population",
                             ]
@@ -1207,7 +1081,7 @@ with compare_tab:
                             y="Value",
                             markers=True,
                             labels={"Value": map_unit},
-                            color_discrete_sequence=[COLORS["hero_end"]],
+                            color_discrete_sequence=[COLORS["accent"]],
                         )
                         region_fig.update_layout(clickmode="event+select")
                         region_event = st.plotly_chart(
@@ -1236,8 +1110,8 @@ with compare_tab:
                             [
                                 "Year",
                                 "Country",
-                                "EmissionsMtCO2",
-                                "EmissionsPerCapitaTonnesCO2",
+                                "EmissionsMtCO2e",
+                                "EmissionsPerCapitaTonnesCO2e",
                                 "GDPPerCapitaUSD",
                                 "Population",
                             ]
@@ -1256,14 +1130,14 @@ with compare_tab:
             with st.popover(f"🗺️ {selected_region} · at a glance", use_container_width=True):
                 st.metric("Countries / economies", f"{region_snapshot['CountryISO3'].nunique():,}")
                 st.metric(
-                    "Total emissions · Mt CO₂",
-                    format_metric(aggregate_value(region_snapshot, "EmissionsMtCO2"), "EmissionsMtCO2"),
+                    "Total emissions · Mt CO₂e",
+                    format_metric(aggregate_value(region_snapshot, "EmissionsMtCO2e"), "EmissionsMtCO2e"),
                 )
-                median = region_snapshot["EmissionsPerCapitaTonnesCO2"].median()
+                median = region_snapshot["EmissionsPerCapitaTonnesCO2e"].median()
                 st.metric(
                     "Median per-capita emissions",
                     f"{median:,.2f}" if not pd.isna(median) else "—",
-                    "tonnes CO₂",
+                    "tonnes CO₂e",
                 )
                 with st.expander("Regional statistic calculations"):
                     st.dataframe(
@@ -1287,8 +1161,8 @@ with compare_tab:
                     )
                     st.plotly_chart(chart_layout(region_fig, height=300), width="stretch")
                     st.dataframe(
-                        region_snapshot.nlargest(5, "EmissionsMtCO2")[
-                            ["Country", "EmissionsMtCO2", "EmissionsPerCapitaTonnesCO2"]
+                        region_snapshot.nlargest(5, "EmissionsMtCO2e")[
+                            ["Country", "EmissionsMtCO2e", "EmissionsPerCapitaTonnesCO2e"]
                         ],
                         hide_index=True,
                         width="stretch",
@@ -1302,7 +1176,7 @@ with compare_tab:
             unsafe_allow_html=True,
         )
         scatter_data = snapshot.dropna(
-            subset=["GDPPerCapitaUSD", "EmissionsPerCapitaTonnesCO2", "Population"]
+            subset=["GDPPerCapitaUSD", "EmissionsPerCapitaTonnesCO2e", "Population"]
         )
         scatter_data = scatter_data[
             (scatter_data["GDPPerCapitaUSD"] > 0) & (scatter_data["Population"] > 0)
@@ -1313,21 +1187,21 @@ with compare_tab:
             scatter_fig = px.scatter(
                 scatter_data,
                 x="GDPPerCapitaUSD",
-                y="EmissionsPerCapitaTonnesCO2",
+                y="EmissionsPerCapitaTonnesCO2e",
                 size="Population",
                 color="Region",
                 hover_name="Country",
                 hover_data={
                     "CountryISO3": True,
                     "GDPPerCapitaUSD": ":$,.0f",
-                    "EmissionsPerCapitaTonnesCO2": ":,.2f",
-                    "EmissionsMtCO2": ":,.1f",
+                    "EmissionsPerCapitaTonnesCO2e": ":,.2f",
+                    "EmissionsMtCO2e": ":,.1f",
                     "Population": ":,.0f",
                 },
                 size_max=42,
                 labels={
                     "GDPPerCapitaUSD": "GDP per capita · current US$ (log scale)",
-                    "EmissionsPerCapitaTonnesCO2": "Emissions per person · tonnes CO₂",
+                    "EmissionsPerCapitaTonnesCO2e": "Emissions per person · tonnes CO₂e",
                     "Region": "World Bank region",
                 },
                 log_x=True,
@@ -1337,7 +1211,7 @@ with compare_tab:
                 marker={"line": {"width": 0.6, "color": "#ffffff"}},
                 hovertemplate=(
                     "%{hovertext}<br>GDP/person: $%{x:,.0f}<br>"
-                    "Emissions/person: %{y:,.2f} t CO₂<extra></extra>"
+                    "Emissions/person: %{y:,.2f} t CO₂e<extra></extra>"
                 ),
             )
             st.plotly_chart(chart_layout(scatter_fig, height=560), width="stretch")
@@ -1345,7 +1219,7 @@ with compare_tab:
             st.markdown(
                 "- One mark represents a country/economy in the selected year and filters.\n"
                 "- **Horizontal position:** GDP per person in current US dollars, plotted on a logarithmic x-axis.\n"
-                "- **Vertical position:** source emissions per person (Mt CO₂ × 1,000,000 ÷ population).\n"
+                "- **Vertical position:** source emissions per person (Mt CO₂e × 1,000,000 ÷ population).\n"
                 "- **Bubble-size input:** total population; Plotly scales marker sizes for readability.\n"
                 "- Marks missing GDP/person, emissions/person, or population, and non-positive GDP/person/population, are omitted."
             )
@@ -1417,11 +1291,11 @@ with data_tab:
             "Region",
             "IncomeLevel",
             "Year",
-            "EmissionsMtCO2",
+            "EmissionsMtCO2e",
             "Population",
             "GDPPerCapitaUSD",
-            "EmissionsPerCapitaTonnesCO2",
-            "EmissionsKgCO2PerGDPUSD",
+            "EmissionsPerCapitaTonnesCO2e",
+            "EmissionsKgPerGDPUSD",
         ]
         table = snapshot.sort_values(measure_column, ascending=False, na_position="last")
         st.dataframe(
@@ -1430,14 +1304,14 @@ with data_tab:
             width="stretch",
             height=440,
             column_config={
-                "EmissionsMtCO2": st.column_config.NumberColumn("Emissions · Mt CO₂", format="%.1f"),
+                "EmissionsMtCO2e": st.column_config.NumberColumn("Emissions · Mt CO₂e", format="%.1f"),
                 "Population": st.column_config.NumberColumn("Population", format="%d"),
                 "GDPPerCapitaUSD": st.column_config.NumberColumn("GDP/person · US$", format="$%.0f"),
-                "EmissionsPerCapitaTonnesCO2": st.column_config.NumberColumn(
-                    "Emissions/person · t CO₂", format="%.2f"
+                "EmissionsPerCapitaTonnesCO2e": st.column_config.NumberColumn(
+                    "Emissions/person · t CO₂e", format="%.2f"
                 ),
-                "EmissionsKgCO2PerGDPUSD": st.column_config.NumberColumn(
-                    "Intensity · kg CO₂/US$", format="%.3f"
+                "EmissionsKgPerGDPUSD": st.column_config.NumberColumn(
+                    "Intensity · kg CO₂e/US$", format="%.3f"
                 ),
             },
         )
@@ -1467,17 +1341,16 @@ with experiment_tab:
         experiment_column, experiment_unit = METRICS[experiment_label]
 
         scenario = base.copy()
-        scenario["EmissionsMtCO2"] *= 1 + emissions_change / 100
+        scenario["EmissionsMtCO2e"] *= 1 + emissions_change / 100
         scenario["Population"] *= 1 + population_change / 100
         scenario["GDPPerCapitaUSD"] *= 1 + gdp_change / 100
-        scenario["GDPUSD"] = scenario["GDPPerCapitaUSD"] * scenario["Population"]
-        scenario["EmissionsPerCapitaTonnesCO2"] = (
-            scenario["EmissionsMtCO2"] * 1_000_000 / scenario["Population"]
+        scenario["EmissionsPerCapitaTonnesCO2e"] = (
+            scenario["EmissionsMtCO2e"] * 1_000_000 / scenario["Population"]
         ).where(scenario["Population"] > 0)
-        scenario["EmissionsKgCO2PerGDPUSD"] = (
-            scenario["EmissionsMtCO2"] * 1_000_000_000
-            / scenario["GDPUSD"]
-        ).where(scenario["GDPUSD"] > 0)
+        scenario["EmissionsKgPerGDPUSD"] = (
+            scenario["EmissionsMtCO2e"] * 1_000_000_000
+            / (scenario["GDPPerCapitaUSD"] * scenario["Population"])
+        ).where((scenario["GDPPerCapitaUSD"] > 0) & (scenario["Population"] > 0))
 
         scenario_snapshot = scenario[scenario["Year"] == snapshot_year]
         observed_value = aggregate_value(snapshot, experiment_column)
@@ -1553,19 +1426,19 @@ with calculations_tab:
             [
                 {
                     "Indicator": "Emissions per person",
-                    "Calculation": "EmissionsMtCO₂ × 1,000,000 ÷ Population",
-                    "Units": "tonnes CO₂/person",
+                    "Calculation": "EmissionsMtCO₂e × 1,000,000 ÷ Population",
+                    "Units": "tonnes CO₂e/person",
                     "Required inputs": "Emissions ≥ 0; population > 0",
                 },
                 {
                     "Indicator": "Emissions intensity",
-                    "Calculation": "EmissionsMtCO₂ × 1,000,000,000 ÷ GDPUSD",
-                    "Units": "kg CO₂/current US$",
-                    "Required inputs": "Emissions ≥ 0; GDPUSD > 0",
+                    "Calculation": "EmissionsMtCO₂e × 1,000,000,000 ÷ (GDP/person × Population)",
+                    "Units": "kg CO₂e/current US$",
+                    "Required inputs": "Emissions ≥ 0; GDP/person > 0; population > 0",
                 },
                 {
                     "Indicator": "Population-weighted GDP/person",
-                    "Calculation": "sum(GDPUSD) ÷ sum(population)",
+                    "Calculation": "sum(GDP/person × population) ÷ sum(population)",
                     "Units": "current US$/person",
                     "Required inputs": "GDP/person and population available; positive population",
                 },
