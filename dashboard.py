@@ -5,6 +5,15 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from climate_trace import (
+    API_DOCS_URL,
+    ClimateTraceAPIError,
+    get_owner_emissions,
+    get_owner_sources,
+    get_source_history,
+    search_owners,
+)
+
 
 ROOT = Path(__file__).resolve().parent
 WORKBOOK_PATH = ROOT / "data" / "emissions_powerbi_2000_2023.xlsx"
@@ -29,36 +38,48 @@ METRICS = {
     "Emissions intensity": ("EmissionsKgPerGDPUSD", "kg CO₂e/current US$"),
 }
 THEMES = {
-    "Field guide": {
-        "background": "#f3f6f4",
+    "Skyline blue": {
+        "background": "#f6f8fc",
         "panel": "#ffffff",
-        "muted": "#657572",
-        "text": "#172c2a",
-        "accent": "#148b78",
-        "grid": "#e3ebe8",
+        "muted": "#5f6368",
+        "text": "#202124",
+        "accent": "#1a73e8",
+        "accent_soft": "#e8f0fe",
+        "secondary": "#34a853",
+        "highlight": "#ea4335",
+        "grid": "#dadce0",
+        "chart_colors": ["#1a73e8", "#ea4335", "#fbbc04", "#34a853", "#a142f4", "#00acc1"],
     },
-    "Civic blue": {
-        "background": "#f2f5fa",
-        "panel": "#ffffff",
-        "muted": "#637189",
-        "text": "#1c2d48",
-        "accent": "#356bd1",
-        "grid": "#e2e8f1",
+    "Apricot bloom": {
+        "background": "#fff8f1",
+        "panel": "#fffdf9",
+        "muted": "#7a5a4a",
+        "text": "#352217",
+        "accent": "#e45a20",
+        "accent_soft": "#ffe5d3",
+        "secondary": "#2a9d8f",
+        "highlight": "#d92d70",
+        "grid": "#f0d8c8",
+        "chart_colors": ["#e45a20", "#4169e1", "#2a9d8f", "#d92d70", "#7d4ec4", "#d49a00"],
     },
-    "Carbon contrast": {
-        "background": "#101a1a",
-        "panel": "#192525",
-        "muted": "#a7b6b2",
-        "text": "#edf4f1",
-        "accent": "#6bd5ad",
-        "grid": "#344744",
+    "Night violet": {
+        "background": "#19192b",
+        "panel": "#25253d",
+        "muted": "#b4b0ce",
+        "text": "#f3effc",
+        "accent": "#c18cff",
+        "accent_soft": "#3b2e56",
+        "secondary": "#69d5c5",
+        "highlight": "#ff9e7a",
+        "grid": "#403d60",
+        "chart_colors": ["#c18cff", "#69d5c5", "#ff9e7a", "#8ab4f8", "#ffd166", "#f28bb2"],
     },
 }
 
 
 st.set_page_config(
     page_title="Emissions data | UN Data Commons",
-    page_icon="🌍",
+    page_icon="◈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -81,15 +102,36 @@ def load_data(workbook_path, modified_time):
     return data
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_climate_trace_owners(name):
+    return search_owners(name)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_climate_trace_emissions(owner_id, year, gas):
+    return get_owner_emissions(owner_id, year, gas)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_climate_trace_sources(owner_id, year, gas):
+    return get_owner_sources(owner_id, year, gas)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_climate_trace_source_history(source_id, start_year, end_year, gas):
+    return get_source_history(source_id, start_year, end_year, gas)
+
+
 def chart_layout(fig, height=390):
     fig.update_layout(
         height=height,
         paper_bgcolor=COLORS["panel"],
         plot_bgcolor=COLORS["panel"],
-        font={"family": "DM Sans, sans-serif", "color": COLORS["text"]},
+        font={"family": "Google Sans, Arial, sans-serif", "color": COLORS["text"]},
+        colorway=COLORS["chart_colors"],
         margin={"l": 18, "r": 18, "t": 44, "b": 18},
         legend={"title": None, "orientation": "h", "y": 1.12, "x": 0},
-        hoverlabel={"bgcolor": "#1d2b42", "font_color": "#ffffff"},
+        hoverlabel={"bgcolor": COLORS["text"], "font_color": COLORS["panel"]},
     )
     fig.update_xaxes(gridcolor=COLORS["grid"], zerolinecolor=COLORS["muted"])
     fig.update_yaxes(gridcolor=COLORS["grid"], zerolinecolor=COLORS["muted"])
@@ -326,7 +368,7 @@ def make_deviation_chart(frame, column, label, unit, selected_country=None):
     )
     fig.add_vline(
         x=median,
-        line_color="#e69f45",
+        line_color=COLORS["highlight"],
         line_dash="dash",
         annotation_text="Median",
         annotation_position="bottom",
@@ -336,7 +378,7 @@ def make_deviation_chart(frame, column, label, unit, selected_country=None):
         if not selected.empty:
             fig.add_vline(
                 x=selected.iloc[0][column],
-                line_color="#9658a5",
+                line_color=COLORS["secondary"],
                 line_dash="dash",
                 annotation_text=selected_country,
                 annotation_position="bottom right",
@@ -357,37 +399,102 @@ except (OSError, ValueError, KeyError) as error:
     st.error(f"Could not load the dashboard workbook: {error}")
     st.stop()
 
+if st.session_state.get("presentation_theme") not in THEMES:
+    st.session_state["presentation_theme"] = next(iter(THEMES))
 theme_name = st.sidebar.selectbox("Presentation theme", list(THEMES), key="presentation_theme")
 COLORS = THEMES[theme_name]
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-    .stApp {{ background: {COLORS['background']}; color: {COLORS['text']}; font-family: 'DM Sans', sans-serif; }}
+    @import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap');
+    .stApp {{ background: {COLORS['background']}; color: {COLORS['text']}; font-family: "Google Sans", Arial, sans-serif; }}
+    .stApp button, .stApp input, .stApp textarea, .stApp select {{
+      font-family: "Google Sans", Arial, sans-serif;
+    }}
+    [data-testid="stHeader"] {{ background: transparent; }}
     [data-testid="stSidebar"] {{ background: {COLORS['panel']}; border-right: 1px solid {COLORS['grid']}; }}
-    .main .block-container {{ max-width: 1440px; padding-top: 1.5rem; padding-bottom: 3rem; }}
+    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {{
+      letter-spacing: -.02em; font-weight: 600;
+    }}
+    .main .block-container {{ max-width: 1440px; padding-top: 1rem; padding-bottom: 3rem; }}
     h1, h2, h3 {{ color: {COLORS['text']} !important; }}
+    h1 {{ letter-spacing: -.04em; font-weight: 600 !important; }}
     [data-testid="stMetric"] {{
-      background: {COLORS['panel']}; border: 1px solid {COLORS['grid']};
-      padding: 14px 16px; border-radius: 8px; box-shadow: none;
+      background: {COLORS['panel']}; border: 0;
+      padding: 16px 18px; border-radius: 16px; box-shadow: 0 1px 2px {COLORS['grid']};
     }}
     [data-testid="stMetricLabel"] {{ color: {COLORS['muted']} !important; }}
     [data-testid="stMetricValue"] {{ color: {COLORS['text']} !important; }}
     div[data-testid="stVerticalBlockBorderWrapper"] {{
-      background: {COLORS['panel']}; border: 1px solid {COLORS['grid']};
-      border-radius: 8px; box-shadow: none;
+      background: {COLORS['panel']}; border: 0;
+      border-radius: 16px; box-shadow: 0 1px 2px {COLORS['grid']};
     }}
     div[data-testid="stVerticalBlock"] div[data-testid="stHorizontalBlock"] {{ gap: 1rem; }}
-    button[data-baseweb="tab"] {{ font-weight: 600; }}
-    button[data-baseweb="tab"][aria-selected="true"] {{ color: {COLORS['accent']}; }}
+    [data-testid="stTextInput"] [data-baseweb="input"] {{
+      background: transparent; border: 0; border-bottom: 1px solid {COLORS['grid']};
+      border-radius: 0; box-shadow: none;
+    }}
+    [data-testid="stTextInput"] [data-baseweb="input"]:focus-within {{
+      border-bottom: 2px solid {COLORS['accent']}; box-shadow: none;
+    }}
+    [data-testid="stTextInput"] input {{ color: {COLORS['text']}; }}
+    [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+    [data-testid="stMultiSelect"] [data-baseweb="select"] > div {{
+      background: transparent; border: 0; border-bottom: 1px solid {COLORS['grid']};
+      border-radius: 0; box-shadow: none;
+    }}
+    [data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within,
+    [data-testid="stMultiSelect"] [data-baseweb="select"] > div:focus-within {{
+      border-bottom: 2px solid {COLORS['accent']}; box-shadow: none;
+    }}
+    [data-testid="baseButton-secondary"],
+    [data-testid="baseButton-primary"] {{
+      border: 0; border-radius: 6px; box-shadow: none; font-weight: 600;
+      transition: background-color 120ms ease, color 120ms ease;
+    }}
+    [data-testid="baseButton-secondary"] {{
+      background: transparent; color: {COLORS['text']};
+    }}
+    [data-testid="baseButton-secondary"]:hover {{
+      background: {COLORS['accent_soft']}; color: {COLORS['accent']};
+    }}
+    [data-testid="baseButton-primary"] {{
+      background: {COLORS['accent']}; color: {COLORS['panel']};
+    }}
+    [data-testid="baseButton-primary"]:hover {{ filter: brightness(0.94); }}
+    [data-testid="stTabs"] [role="tablist"] {{
+      gap: .35rem; border-bottom: 1px solid {COLORS['grid']};
+    }}
+    button[data-baseweb="tab"] {{
+      background: transparent; color: {COLORS['muted']}; font-weight: 600;
+      border-radius: 0; border-bottom: 2px solid transparent;
+      padding: .7rem .85rem; transition: color 120ms ease, background-color 120ms ease;
+    }}
+    button[data-baseweb="tab"]:hover {{
+      background: {COLORS['accent_soft']}; color: {COLORS['accent']};
+    }}
+    button[data-baseweb="tab"][aria-selected="true"] {{
+      color: {COLORS['accent']}; border-bottom-color: {COLORS['accent']};
+    }}
+    .workspace-wordmark {{
+      display: flex; align-items: center; gap: .7rem; margin: 0 0 .45rem;
+      color: {COLORS['muted']}; font-size: .78rem; font-weight: 600;
+      letter-spacing: .11em; text-transform: uppercase;
+    }}
+    .workspace-wordmark .brand-glyph {{
+      color: {COLORS['accent']}; font-size: 1.35rem; line-height: 1;
+    }}
+    .workspace-wordmark .desk-label {{
+      margin-left: auto; color: {COLORS['accent']}; letter-spacing: .08em;
+    }}
     .section-note {{ color: {COLORS['muted']}; font-size: .9rem; margin-top: -.35rem; }}
-    .stCaption {{ color: {COLORS['muted']}; }}
+    [data-testid="stCaptionContainer"] {{ color: {COLORS['muted']}; }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.sidebar.markdown("## Explore the data")
+st.sidebar.markdown("## ◫ Explore the data")
 st.sidebar.caption("Filters update the charts, indicators, table, and export.")
 
 min_year, max_year = int(data["Year"].min()), int(data["Year"].max())
@@ -434,7 +541,7 @@ selected_income = st.sidebar.multiselect(
     default=income_levels,
 )
 
-st.sidebar.markdown("### Interaction controls")
+st.sidebar.markdown("### ⋯ Interaction controls")
 trend_mode = st.sidebar.radio(
     "Trend mode",
     ["Aggregate", "Country spotlight", "Regional comparison"],
@@ -499,7 +606,7 @@ def emissions_share_chart(frame, group_column):
         names=group_column,
         values="EmissionsMtCO2e",
         hole=0.58,
-        color_discrete_sequence=px.colors.qualitative.Safe,
+        color_discrete_sequence=COLORS["chart_colors"],
     )
     fig.update_traces(
         textposition="inside",
@@ -579,12 +686,18 @@ def make_trend_chart(frame):
                 fig.add_trace(avg_fig.data[0])
                 fig.update_traces(
                     selector={"name": "Average"},
-                    line={"color": "#148b78", "width": 2, "dash": "dash"},
+                    line={"color": COLORS["secondary"], "width": 2, "dash": "dash"},
                     hovertemplate="Regional average<br>Year %{x}<br>%{y:,.3f}<extra></extra>",
                 )
     fig.update_layout(title=f"{year_range[0]}–{year_range[1]}", clickmode="event+select")
     return fig
 
+
+st.markdown(
+    '<div class="workspace-wordmark"><span class="brand-glyph">◈</span>'
+    '<span>UN Data Commons</span><span class="desk-label">Climate desk</span></div>',
+    unsafe_allow_html=True,
+)
 
 title_column, shuffle_column, insights_column = st.columns([4, 1, 1])
 with title_column:
@@ -595,7 +708,7 @@ with title_column:
     )
 with shuffle_column:
     st.button(
-        "Shuffle",
+        "↻ Shuffle",
         key="shuffle_view",
         help="Choose a different snapshot year and measure.",
         on_click=shuffle_view,
@@ -603,7 +716,7 @@ with shuffle_column:
     )
 with insights_column:
     st.button(
-        "Hide insights" if st.session_state.get("insights_open", False) else "Insights",
+        "× Hide insights" if st.session_state.get("insights_open", False) else "✦ Insights",
         key="toggle_insights",
         on_click=toggle_insights,
         use_container_width=True,
@@ -664,8 +777,8 @@ if st.session_state.get("insights_open", False):
         else:
             st.info("No complete records are available for this snapshot.")
 
-overview_tab, compare_tab, data_tab, experiment_tab, calculations_tab = st.tabs(
-    ["Overview", "Compare", "Country data", "Experiment", "Calculations"]
+overview_tab, compare_tab, data_tab, climate_trace_tab, experiment_tab, calculations_tab = st.tabs(
+    ["◉ Overview", "⇄ Compare", "▤ Country data", "⌕ Company & assets", "✦ Experiment", "≡ Calculations"]
 )
 
 with overview_tab:
@@ -1208,7 +1321,7 @@ with compare_tab:
                 opacity=0.76,
             )
             scatter_fig.update_traces(
-                marker={"line": {"width": 0.6, "color": "#ffffff"}},
+                marker={"line": {"width": 0.6, "color": COLORS["panel"]}},
                 hovertemplate=(
                     "%{hovertext}<br>GDP/person: $%{x:,.0f}<br>"
                     "Emissions/person: %{y:,.2f} t CO₂e<extra></extra>"
@@ -1322,6 +1435,486 @@ with data_tab:
             mime="text/csv",
         )
 
+with climate_trace_tab:
+    st.subheader("Company and emitting assets")
+    st.caption(
+        "Search Climate TRACE owner records, then explore their linked emissions sources. "
+        "This is an asset-level inventory, not a complete corporate Scope 1/2/3 disclosure."
+    )
+    st.markdown(f"[Climate TRACE API v7 documentation]({API_DOCS_URL})")
+
+    company_query = st.text_input(
+        "Search for a company or asset owner",
+        value="Shell",
+        key="climate_trace_company_query",
+    )
+    if st.button("Find matching owners", key="climate_trace_search"):
+        st.session_state["climate_trace_result"] = None
+        st.session_state["climate_trace_search_done"] = True
+        if not company_query.strip():
+            st.session_state["climate_trace_owners"] = []
+            st.session_state["climate_trace_search_done"] = False
+            st.error("Enter a company or owner name to search.")
+        else:
+            try:
+                st.session_state["climate_trace_owners"] = cached_climate_trace_owners(
+                    company_query.strip()
+                )
+            except ClimateTraceAPIError as error:
+                st.session_state["climate_trace_owners"] = []
+                st.session_state["climate_trace_search_done"] = False
+                st.error(str(error))
+
+    owners = st.session_state.get("climate_trace_owners", [])
+    usable_owners = [
+        owner for owner in owners if owner.get("id") is not None and owner.get("name")
+    ]
+    if not owners and st.session_state.get("climate_trace_search_done", False):
+        st.info("No Climate TRACE owner records match that search.")
+    elif owners and not usable_owners:
+        st.error("Climate TRACE returned owner records without usable names or IDs.")
+    elif usable_owners:
+        owner_labels = {
+            f"{owner['name']} · {owner['id']}": owner["id"] for owner in usable_owners
+        }
+        selected_owner_label = st.selectbox(
+            "Climate TRACE owner match",
+            list(owner_labels),
+            key="climate_trace_owner_choice",
+        )
+        selected_owner_id = owner_labels[selected_owner_label]
+
+        year_options = list(range(2021, 2027))
+        year_columns = st.columns(2)
+        with year_columns[0]:
+            trend_start_year = st.selectbox(
+                "Trend start year",
+                year_options,
+                index=0,
+                key="climate_trace_start_year",
+            )
+        with year_columns[1]:
+            trend_end_year = st.selectbox(
+                "Trend and asset snapshot end year",
+                year_options,
+                index=4,
+                key="climate_trace_end_year",
+            )
+        gas_options = {
+            "CO₂ equivalent · 100-year GWP": "co2e_100yr",
+            "CO₂ equivalent · 20-year GWP": "co2e_20yr",
+            "Carbon dioxide": "co2",
+            "Methane": "ch4",
+            "Nitrous oxide": "n2o",
+        }
+        gas_label = st.selectbox(
+            "Gas measure",
+            list(gas_options),
+            key="climate_trace_gas",
+        )
+        gas_code = gas_options[gas_label]
+        result_key = (
+            str(selected_owner_id),
+            trend_start_year,
+            trend_end_year,
+            gas_code,
+        )
+
+        if st.button("Load emissions and assets", key="climate_trace_load"):
+            if trend_start_year > trend_end_year:
+                st.error("Trend start year must not be later than the end year.")
+            else:
+                try:
+                    with st.spinner("Querying Climate TRACE emissions and assets..."):
+                        annual_records = []
+                        yearly_payloads = {}
+                        for year in range(trend_start_year, trend_end_year + 1):
+                            payload = cached_climate_trace_emissions(
+                                selected_owner_id, year, gas_code
+                            )
+                            yearly_payloads[year] = payload
+                            summaries = payload.get("totals", {}).get("summaries", [])
+                            total_record = next(
+                                (
+                                    row
+                                    for row in summaries
+                                    if row.get("gas") == gas_code
+                                    and row.get("emissionsQuantity") is not None
+                                ),
+                                None,
+                            )
+                            if total_record is not None:
+                                annual_records.append(
+                                    {
+                                        "Year": year,
+                                        "EmissionsMt": float(
+                                            total_record["emissionsQuantity"]
+                                        )
+                                        / 1_000_000,
+                                    }
+                                )
+                        source_records = cached_climate_trace_sources(
+                            selected_owner_id, trend_end_year, gas_code
+                        )
+                    st.session_state["climate_trace_result"] = {
+                        "key": result_key,
+                        "owner_name": selected_owner_label,
+                        "annual_records": annual_records,
+                        "snapshot": yearly_payloads.get(trend_end_year, {}),
+                        "sources": source_records,
+                    }
+                except ClimateTraceAPIError as error:
+                    st.session_state["climate_trace_result"] = None
+                    st.error(str(error))
+
+        result = st.session_state.get("climate_trace_result")
+        if not result or result.get("key") != result_key:
+            st.info(
+                "Choose the owner and period, then load the data. "
+                "2026 is a partial year in the current Climate TRACE release."
+            )
+        else:
+            snapshot_payload = result["snapshot"]
+            total_summaries = snapshot_payload.get("totals", {}).get("summaries", [])
+            total_record = next(
+                (
+                    row
+                    for row in total_summaries
+                    if row.get("gas") == gas_code
+                    and row.get("emissionsQuantity") is not None
+                ),
+                None,
+            )
+            total_mt = (
+                float(total_record["emissionsQuantity"]) / 1_000_000
+                if total_record
+                else None
+            )
+
+            source_frame = pd.json_normalize(result["sources"])
+            if not source_frame.empty:
+                source_frame = source_frame.rename(
+                    columns={
+                        "centroid.longitude": "Longitude",
+                        "centroid.latitude": "Latitude",
+                        "name": "Asset",
+                        "sector": "Sector",
+                        "subsector": "Subsector",
+                        "country": "Country",
+                        "sourceType": "Source type",
+                        "assetType": "Asset type",
+                        "emissionsQuantity": "EmissionsTonnes",
+                    }
+                )
+                if "EmissionsTonnes" in source_frame:
+                    source_frame["EmissionsMt"] = pd.to_numeric(
+                        source_frame["EmissionsTonnes"], errors="coerce"
+                    ) / 1_000_000
+                else:
+                    source_frame["EmissionsMt"] = float("nan")
+
+            unique_countries = (
+                source_frame["Country"].nunique()
+                if not source_frame.empty and "Country" in source_frame
+                else 0
+            )
+            metric_columns = st.columns(4)
+            metric_columns[0].metric(
+                f"Owner emissions · {trend_end_year}",
+                f"{total_mt:,.2f} Mt" if total_mt is not None else "—",
+                gas_label,
+            )
+            metric_columns[1].metric(
+                "Source records returned",
+                f"{len(source_frame):,}",
+                "ranked by emissions; maximum 100",
+            )
+            metric_columns[2].metric("Countries in returned sources", f"{unique_countries:,}")
+            metric_columns[3].metric(
+                "Sectors in owner total",
+                f"{len(snapshot_payload.get('sectors', {}).get('summaries', [])):,}",
+            )
+
+            annual_frame = pd.DataFrame(result["annual_records"])
+            if annual_frame.empty:
+                st.info("No annual emissions records were returned for this owner and period.")
+            else:
+                annual_fig = px.line(
+                    annual_frame,
+                    x="Year",
+                    y="EmissionsMt",
+                    markers=True,
+                    labels={
+                        "Year": "Year",
+                        "EmissionsMt": f"Emissions · Mt {gas_label}",
+                    },
+                    title=f"Owner-linked emissions · {trend_start_year}–{trend_end_year}",
+                )
+                st.plotly_chart(chart_layout(annual_fig), width="stretch")
+
+            monthly_records = (
+                snapshot_payload.get("totals", {}).get("timeseries", []) or []
+            )
+            monthly_frame = pd.DataFrame(monthly_records)
+            if not monthly_frame.empty and "month" in monthly_frame:
+                monthly_frame["EmissionsMt"] = pd.to_numeric(
+                    monthly_frame["emissionsQuantity"], errors="coerce"
+                ) / 1_000_000
+                monthly_frame["Month"] = pd.to_numeric(
+                    monthly_frame["month"], errors="coerce"
+                )
+                monthly_frame = monthly_frame.dropna(subset=["Month", "EmissionsMt"])
+                monthly_frame["Month"] = monthly_frame["Month"].astype(int)
+                monthly_frame["Month name"] = pd.to_datetime(
+                    monthly_frame["Month"], format="%m"
+                ).dt.strftime("%b")
+                if not monthly_frame.empty:
+                    monthly_fig = px.line(
+                        monthly_frame,
+                        x="Month name",
+                        y="EmissionsMt",
+                        markers=True,
+                        category_orders={
+                            "Month name": [
+                                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                            ]
+                        },
+                        labels={
+                            "Month name": "Month",
+                            "EmissionsMt": f"Emissions · Mt {gas_label}",
+                        },
+                        title=f"Monthly profile · {trend_end_year}",
+                    )
+                    st.plotly_chart(chart_layout(monthly_fig), width="stretch")
+            else:
+                st.info(f"No monthly emissions profile was returned for {trend_end_year}.")
+
+            sector_records = (
+                snapshot_payload.get("sectors", {}).get("summaries", []) or []
+            )
+            subsector_records = (
+                snapshot_payload.get("subsectors", {}).get("summaries", []) or []
+            )
+            sector_columns = st.columns(2)
+            sector_frame = pd.DataFrame(sector_records)
+            if not sector_frame.empty:
+                sector_frame["EmissionsMt"] = pd.to_numeric(
+                    sector_frame["emissionsQuantity"], errors="coerce"
+                ) / 1_000_000
+                with sector_columns[0]:
+                    sector_fig = px.pie(
+                        sector_frame,
+                        names="sector",
+                        values="EmissionsMt",
+                        hole=0.55,
+                        title=f"Owner total by sector · {trend_end_year}",
+                    )
+                    st.plotly_chart(chart_layout(sector_fig), width="stretch")
+            else:
+                sector_columns[0].info("No sector breakdown was returned.")
+
+            subsector_frame = pd.DataFrame(subsector_records)
+            if not subsector_frame.empty:
+                subsector_frame["EmissionsMt"] = pd.to_numeric(
+                    subsector_frame["emissionsQuantity"], errors="coerce"
+                ) / 1_000_000
+                subsector_frame = subsector_frame.sort_values(
+                    "EmissionsMt", ascending=True
+                )
+                with sector_columns[1]:
+                    subsector_fig = px.bar(
+                        subsector_frame,
+                        x="EmissionsMt",
+                        y="subsector",
+                        color="sector",
+                        orientation="h",
+                        labels={
+                            "subsector": "Subsector",
+                            "EmissionsMt": f"Emissions · Mt {gas_label}",
+                            "sector": "Sector",
+                        },
+                        title=f"Owner total by subsector · {trend_end_year}",
+                    )
+                    st.plotly_chart(chart_layout(subsector_fig), width="stretch")
+            else:
+                sector_columns[1].info("No subsector breakdown was returned.")
+
+            if source_frame.empty:
+                st.info(
+                    "No asset-level source records were returned for the selected snapshot year."
+                )
+            else:
+                source_columns = st.columns([1.2, 1])
+                map_frame = source_frame.dropna(
+                    subset=["Longitude", "Latitude", "EmissionsMt"]
+                )
+                if not map_frame.empty:
+                    with source_columns[0]:
+                        asset_map = px.scatter_geo(
+                            map_frame,
+                            lat="Latitude",
+                            lon="Longitude",
+                            color="Sector",
+                            size="EmissionsMt",
+                            size_max=22,
+                            hover_name="Asset",
+                            hover_data={
+                                "Country": True,
+                                "Subsector": True,
+                                "EmissionsMt": ":,.3f",
+                                "Latitude": False,
+                                "Longitude": False,
+                            },
+                            labels={"EmissionsMt": f"Emissions · Mt {gas_label}"},
+                            title=f"Mapped assets · {trend_end_year}",
+                        )
+                        asset_map.update_geos(
+                            projection_type="natural earth",
+                            showcountries=True,
+                            showcoastlines=False,
+                        )
+                        st.plotly_chart(
+                            chart_layout(asset_map, height=500),
+                            width="stretch",
+                        )
+                else:
+                    source_columns[0].info("No mapped coordinates were returned for these sources.")
+
+                ranked_sources = source_frame.dropna(
+                    subset=["Asset", "EmissionsMt"]
+                ).nlargest(10, "EmissionsMt").sort_values("EmissionsMt")
+                if not ranked_sources.empty:
+                    with source_columns[1]:
+                        asset_fig = px.bar(
+                            ranked_sources,
+                            x="EmissionsMt",
+                            y="Asset",
+                            color="Sector",
+                            orientation="h",
+                            custom_data=["id"],
+                            labels={
+                                "Asset": "Asset / source",
+                                "EmissionsMt": f"Emissions · Mt {gas_label}",
+                                "Sector": "Sector",
+                            },
+                            title="Top returned assets · select a bar for history",
+                        )
+                        asset_event = st.plotly_chart(
+                            chart_layout(asset_fig, height=500),
+                            width="stretch",
+                            key="climate_trace_asset_rank",
+                            on_select="rerun",
+                            selection_mode="points",
+                        )
+                        selected_points = (
+                            asset_event.get("selection", {}).get("points", [])
+                            if asset_event
+                            else []
+                        )
+                        selected_source_id = None
+                        if selected_points:
+                            custom_data = selected_points[0].get("customdata", [])
+                            if custom_data:
+                                selected_source_id = custom_data[0]
+                        if selected_source_id is not None:
+                            try:
+                                history = cached_climate_trace_source_history(
+                                    selected_source_id,
+                                    trend_start_year,
+                                    trend_end_year,
+                                    gas_code,
+                                )
+                            except ClimateTraceAPIError as error:
+                                st.error(str(error))
+                            else:
+                                history_records = history.get("emissions", []) or []
+                                history_frame = pd.DataFrame(history_records)
+                                if not history_frame.empty:
+                                    history_frame["EmissionsMt"] = pd.to_numeric(
+                                        history_frame["emissionsQuantity"],
+                                        errors="coerce",
+                                    ) / 1_000_000
+                                    history_fig = px.line(
+                                        history_frame,
+                                        x="year",
+                                        y="EmissionsMt",
+                                        markers=True,
+                                        labels={
+                                            "year": "Year",
+                                            "EmissionsMt": f"Emissions · Mt {gas_label}",
+                                        },
+                                        title="Selected source history",
+                                    )
+                                    st.plotly_chart(
+                                        chart_layout(history_fig),
+                                        width="stretch",
+                                    )
+                                else:
+                                    st.info("No historical observations were returned for this source.")
+                        else:
+                            st.caption("Select a bar to load its annual source history.")
+
+                if "Country" in source_frame and "EmissionsMt" in source_frame:
+                    country_frame = (
+                        source_frame.dropna(subset=["Country", "EmissionsMt"])
+                        .groupby("Country", as_index=False)["EmissionsMt"]
+                        .sum()
+                        .nlargest(10, "EmissionsMt")
+                        .sort_values("EmissionsMt")
+                    )
+                    if not country_frame.empty:
+                        country_fig = px.bar(
+                            country_frame,
+                            x="EmissionsMt",
+                            y="Country",
+                            orientation="h",
+                            labels={
+                                "Country": "Country",
+                                "EmissionsMt": f"Emissions · Mt {gas_label}",
+                            },
+                            title="Countries represented in returned assets",
+                        )
+                        st.plotly_chart(chart_layout(country_fig), width="stretch")
+                        st.caption(
+                            "Country totals here are calculated from the returned top-100 asset records, "
+                            "not a complete country-level company inventory."
+                        )
+
+                display_columns = [
+                    column
+                    for column in [
+                        "id",
+                        "Asset",
+                        "Sector",
+                        "Subsector",
+                        "Country",
+                        "Source type",
+                        "Asset type",
+                        "EmissionsTonnes",
+                    ]
+                    if column in source_frame
+                ]
+                st.dataframe(
+                    source_frame[display_columns],
+                    hide_index=True,
+                    width="stretch",
+                )
+                st.download_button(
+                    "Download returned source records (CSV)",
+                    data=source_frame[display_columns].to_csv(index=False).encode("utf-8"),
+                    file_name=f"climate_trace_{selected_owner_id}_{trend_end_year}.csv",
+                    mime="text/csv",
+                    key="climate_trace_download",
+                )
+                st.caption(
+                    "Asset list is ranked by emissions and capped at 100 records. "
+                    "Owner matching is exactly as supplied by Climate TRACE; subsidiary records are not "
+                    "automatically consolidated. Emissions are estimates linked to tracked assets, "
+                    "not audited company-reported totals. Source: Climate TRACE public API v7 (beta); "
+                    "data are published under CC BY 4.0."
+                )
+
 with experiment_tab:
     with st.container(border=True):
         st.subheader("Build a simple what-if")
@@ -1399,7 +1992,7 @@ with experiment_tab:
                 y=["Observed", "What-if"],
                 markers=True,
                 labels={"value": experiment_unit, "variable": "Series", "Year": "Year"},
-                color_discrete_map={"Observed": "#8a9995", "What-if": COLORS["accent"]},
+                color_discrete_map={"Observed": COLORS["muted"], "What-if": COLORS["accent"]},
             )
             scenario_fig.update_traces(hovertemplate="%{fullData.name}<br>Year %{x}<br>%{y:,.3f}<extra></extra>")
             st.plotly_chart(chart_layout(scenario_fig), width="stretch")
